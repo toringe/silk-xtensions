@@ -1,0 +1,90 @@
+#!/usr/bin/python3
+
+# Core modules
+import json
+import subprocess
+from argparse import ArgumentParser
+from shutil import which
+from datetime import datetime
+from collections import OrderedDict
+
+# Third party modules
+from colorama import Fore, Back, Style, init as colorinit
+
+
+# Check if a command is available
+def chkcmd(cmd):
+    path = which(cmd)
+    if path is None:
+        exit('Command not found: {}'.format(cmd))
+    else:
+        return path
+
+# Parse user input
+parser = ArgumentParser()
+parser.add_argument('--json', action='store_true', help='JSON output')
+parser.add_argument('--no-header', dest='header', action="store_false",
+                    help='Hide the header')
+parser.add_argument('--no-color', dest='color', action='store_false',
+                    help='No colors in output')
+args = parser.parse_args()
+
+# Needed SiLK commands
+RWSI = chkcmd('rwsiteinfo')
+
+# Get repo statistics
+cols = 'sensor,id-sensor,repo-start,repo-end'
+cmd = '{} --fields={} --no-titles --delim=, --timestamp=iso'.format(RWSI, cols)
+repo = subprocess.check_output(cmd.split()).decode('utf-8').splitlines()
+
+out = OrderedDict()
+# Check if repo-end is more than an hour off
+for line in repo:
+
+    o = line.split(",")
+    if not o[3] == '':
+        repoend = datetime.strptime(o[3], '%Y-%m-%d %H:%M:%S')
+        diff = abs(datetime.now() - repoend).total_seconds()
+
+        if diff > 3600:
+            o.append('warning')
+            o.append('repo {} h behind'.format(round(diff/3600, 1)))
+        else:
+            o.append('current')
+            o.append('repo is up to date')
+    else:
+        o.append('empty')
+        o.append('uninitialized repo')
+
+    out[o[1]] = {"org": o[0], "repo-start": o[2], "repo-end": o[3],
+                 "status": o[4], "note": o[5]}
+
+if args.json:
+    print(json.dumps(out, indent=4))
+else:
+    if args.color:
+        colorinit()
+    fmt = '{:<4} {:<2} {:^20} {:^20} {:^8} {:<21}'
+    if args.header:
+        header = ['Org.', 'ID', 'Repo Start', 'Repo End', 'Status', 'Note']
+        if args.color:
+            print(Style.BRIGHT + Back.WHITE + Fore.BLACK + fmt.format(*header)
+                  + Style.RESET_ALL)
+        else:
+            print(fmt.format(*header))
+    for sid, data in out.items():
+        scolor = ''
+        if args.color:
+            if data['status'] == 'current':
+                scolor = Style.BRIGHT + Fore.GREEN
+            elif data['status'] == 'warning':
+                scolor = Style.BRIGHT + Fore.YELLOW
+            else:
+                scolor = Style.BRIGHT + Fore.WHITE
+        print((fmt.split()[0] + ' ').format(data['org']), end='')
+        print((fmt.split()[1] + ' ').format(sid), end='')
+        print((fmt.split()[2] + ' ').format(data['repo-start']), end='')
+        print((fmt.split()[3] + ' ').format(data['repo-end']), end='')
+        print(scolor + (fmt.split()[4] + ' ').format(data['status']) +
+              Style.RESET_ALL, end='')
+        print(fmt.split()[5].format(data['note']))
