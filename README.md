@@ -14,3 +14,8 @@ sxrepchk
 Check the SiLK data repository for each sensor (i.e. organization) and see if it is up to date. It basically parses the output of the `rwsiteinfo` command. If the repo data is more than an hour behind, you will see a warning. The tool can also format the output as JSON if the `--json` flag is specified.
 
 You can easily use this tool as a status monitor. E.g. `watch -n 30 -c sxrepchk` will reload the output every 30 seconds so you can have a simple status display of the data repository.
+
+sxapi
+-----
+
+Simple REST API implementation for the sx-tools. Currently only the JSON output of `sxrepchk` is available in the endpoint `/repostatus`. The implementation uses the Bottle framework, so it can easily be extended to support more functionality.
