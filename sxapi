@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+
+# Core modules
+import os
+import sys
+import json
+import logging
+from logging.handlers import SysLogHandler
+
+# Third party modules
+from bottle import *
+
+
+JSONHDR = {'content-type': 'application/json'}
+
+
+# API Exception Wrapper
+class APIError(Exception):
+    def __init__(self, code, message, link=None):
+        self.code = code
+        self.message = message
+        if link is not None:
+            body = {'error': {'code': code, 'message': message, 'href': link}}
+        else:
+            body = {'error': {'code': code, 'message': message}}
+        raise HTTPResponse(json.dumps(body), code, JSONHDR)
+
+
+# Custom handling of 404 errors
+def custom404(error):
+    body = {'error': {'code': 404, 'message': 'No endpoint resource found'}}
+    return HTTPResponse(json.dumps(body), 404, JSONHDR)
+
+
+# Custom handling of 405 errors
+def custom405(error):
+    body = {'error': {'code': 405, 'message': 'No endpoint resource found'}}
+    return HTTPResponse(json.dumps(body), 405, JSONHDR)
+
+
+# Custom handling of 500 errors
+def custom500(error):
+    body = {'error': {'code': 500, 'message': 'The server made a poo-poo'}}
+    return HTTPResponse(json.dumps(body), 500, JSONHDR)
+
+
+# Serve the repo status file
+def repostatus():
+    path, filename = os.path.split(api.config['resources.repostatus'])
+    return static_file(filename, root=path)
+
+
+# Who am i?
+appname = os.path.splitext(os.path.basename(__file__))[0]
+
+# Initiate the API
+api = application = Bottle()
+api.error_handler = {404: custom404, 405: custom405, 500: custom500}
+
+# Log to syslog
+logger = logging.getLogger(appname)
+logger.setLevel(logging.INFO)
+syslog = SysLogHandler(address='/dev/log')
+formatter = logging.Formatter('%(name)s: <%(levelname)s> - %(message)s')
+syslog.setFormatter(formatter)
+logger.addHandler(syslog)
+
+# Try to locate the configuration file
+conffile = '{}.conf'.format(appname)
+cdirs = ['.', '/etc', '/etc/{}'.format(appname), '/usr/local/etc']
+for d in cdirs:
+    configpath = '{}/{}'.format(d, conffile)
+    if os.path.isfile(configpath):
+        logger.info('Using config: {}'.format(os.path.abspath(configpath)))
+        api.config.load_config(configpath)
+
+# Setup API routing
+api.route('/v1/repostatus', 'GET', repostatus)
+
+# App is running by itself so we use the defined wsgi server in config
+if __name__ == "__main__":
+    try:
+        if api.config['wsgi.enabled']:
+            api.run(server=api.config['wsgi.server'],
+                    host=api.config['wsgi.host'],
+                    port=api.config['wsgi.port'],
+                    debug=api.config['debug'])
+            api.close()
+        else:
+            exit('Enable WSGI in config or run app through ext. WSGI server')
+    except KeyError as e:
+        exit('Configuration missing setting for {} in {}'.format(e, conffile))

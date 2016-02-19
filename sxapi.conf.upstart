@@ -1,0 +1,12 @@
+description "SiLK Xtensions REST API"
+author "tor.inge.skaar@gmail.com"
+
+start on runlevel [2345]
+stop on runlevel [!2345]
+
+setuid silk
+setgid silk
+
+respawn
+
+exec /usr/local/sbin/sxapi 2>> /var/log/sxapi.error.log
