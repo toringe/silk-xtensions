@@ -7,8 +7,6 @@ Retention management for SiLK data repository
 # Core modules
 import os
 import re
-import time
-import fnmatch
 import logging
 import subprocess
 from argparse import ArgumentParser, ArgumentTypeError
