@@ -1,63 +1,33 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 '''
 Retention management for SiLK data repository
 
 '''
 
 # Core modules
-from __future__ import print_function
-from argparse import ArgumentParser, ArgumentTypeError
-from datetime import datetime, timedelta
-from logging.handlers import SysLogHandler
 import os
 import re
 import time
 import fnmatch
 import logging
+import subprocess
+from argparse import ArgumentParser, ArgumentTypeError
+from datetime import datetime, timedelta
+from logging.handlers import SysLogHandler
 
-# Third party modules
-import psutil
-
-# Metadata
-__author__ = 'Tor Inge Skaar'
-__license__ = 'MIT'
-__version__ = '2'
-
-# Settings
-PROCNAME = 'rwflowpack'       # Name of running process
-CONFNAME = 'rwflowpack.conf'  # Name of config file
-LOCATION = ['/etc', '/usr']   # Possible locations for config file
+# Output constants [color code, status text]
+O_INF = [94, 'INFO']
+O_WRN = [93, 'WARN']
+O_ERR = [91, 'ERROR']
+O_DBG = [96, 'DEBUG']
 
 
 def find_rootdir():
     '''Determine the root directory of SiLK data storage'''
-
     debug('Trying to determine root directory')
-    debug('Checking running {} processes'.format(PROCNAME))
-    for proc in psutil.process_iter():
-        if proc.name == PROCNAME:
-            debug('Found process: {} (PID: {})'.format(proc.name, proc.pid))
-            cmdfile = '/proc/' + str(proc.pid) + '/cmdline'
-            with open(cmdfile, 'r') as cmd:
-                cmdlist = cmd.read().split('--')
-                rootarg = fnmatch.filter(cmdlist, 'root-directory=*')[0]
-                debug(rootarg)
-                return rootarg.split('=')[1].rstrip('\0')
-
-    debug('Checking {} for {}'.format(' '.join(LOCATION), CONFNAME))
-    for loc in LOCATION:
-        for root, dirs, files in os.walk(loc):
-            for filename in fnmatch.filter(files, CONFNAME):
-                conffile = os.path.join(root, filename)
-                with open(conffile, 'r') as conf:
-                    config = conf.readlines()
-                    rootsetting = fnmatch.filter(config, 'DATA_ROOTDIR=*')[0]
-                    debug(rootsetting)
-                    return rootsetting.split('=')[1]
-
-    # Configuration file not located
-    return False
+    data = subprocess.check_output('silk_config').decode('utf-8').splitlines()
+    d = next((x.split()[1] for x in data if x.startswith('data-root')), False)
+    return d
 
 
 def arg_positive_int(value):
@@ -97,39 +67,27 @@ def arg_time(value):
 def debug(message):
     '''Output debug message only if verbose option is used'''
 
-    prefix = '\033[95m[DEBUG]\033[0m'
     if DEBUG is True:
-        print('{} {}'.format(prefix, message))
+        out(message, O_DBG)
 
 
-def err(message):
-    '''Output error message'''
-    if SILENT is False:
-        prefix = '\033[91m[ERROR]\033[0m'
-        print('{} {}'.format(prefix, message))
-
-
-def warn(message):
-    '''Output warning message'''
+def out(message, code=O_INF):
+    '''Output error, warning or info message'''
 
     if SILENT is False:
-        prefix = '\033[93m[WARN]\033[0m '
-        print('{} {}'.format(prefix, message))
-
-
-def info(message):
-    '''Output informational message'''
-
-    if SILENT is False:
-        prefix = '[INFO] '
-        print('{} {}'.format(prefix, message))
+        prefix = ''
+        reset = '\033[0m'
+        if COLOR is True:
+            prefix = '\033[{}m'.format(code[0])
+        level = '[{}]'.format(code[1])
+        print(' {}{:^7}{} {}'.format(prefix, level, reset, message))
 
 
 def main():
     '''Main execution'''
 
     # Parse input arguments
-    parser = ArgumentParser(description='Remove old SiLK data')
+    parser = ArgumentParser(description='Delete old SiLK data')
     group = parser.add_mutually_exclusive_group()
     outgroup = parser.add_mutually_exclusive_group()
     parser.add_argument('-r', metavar='PATH', dest='rootdir',
@@ -142,19 +100,19 @@ def main():
                              YYYY-MM-DD (HH:mm:ss)')
     parser.add_argument('-x', dest='dryrun', action='store_true',
                         help='Dry-run (does not remove any data)')
+    parser.add_argument('-m', dest='color', action='store_false',
+                        help='Monochrome output (no colors)')
     outgroup.add_argument('-v', dest='verbose', action='store_true',
                           help='Verbose output (Debug)')
     outgroup.add_argument('-q', dest='silent', action='store_true',
                           help='Suppress all console output')
     args = parser.parse_args()
 
-    # Set debug status
-    global DEBUG
+    # Declare global status variables
+    global DEBUG, SILENT, COLOR
     DEBUG = args.verbose
-
-    # Set quiet status
-    global SILENT
     SILENT = args.silent
+    COLOR = args.color
 
     # Log to local syslog
     logger = logging.getLogger(os.path.basename(__file__))
@@ -163,7 +121,7 @@ def main():
     formatter = logging.Formatter('%(name)s: <%(levelname)s> - %(message)s')
     syslog.setFormatter(formatter)
     logger.addHandler(syslog)
-    info('Enabled logging to syslog')
+    out('Enabled logging to syslog')
 
     # Set root directory
     if args.rootdir:
@@ -175,39 +133,41 @@ def main():
             errmsg2 = 'Please specify it manually with -r option'
             logger.critical(errmsg1)
             exit(errmsg1 + '\n' + errmsg2)
-    info('SiLK Data Directory: {}'.format(rootdir))
+    out('SiLK Data Directory: {}'.format(rootdir))
 
     # Set retention time
     if args.days:
-        time = datetime.now() - timedelta(days=args.days)
+        limit = datetime.now() - timedelta(days=args.days)
     elif args.time:
         try:
-            time = datetime.strptime(args.time, '%Y-%m-%d')
+            limit = datetime.strptime(args.time, '%Y-%m-%d')
         except ValueError:
-            time = datetime.strptime(args.time, '%Y-%m-%d %H:%M:%S')
+            limit = datetime.strptime(args.time, '%Y-%m-%d %H:%M:%S')
     else:
-        err('No retention time defined (-d or -t)')
+        out('No retention time defined (-d or -t)', O_ERR)
         exit(1)
-    timestr = datetime.strftime(time, '%Y-%m-%d %H:%M:%S')
-    infomsg = 'Retention limit: {}'.format(timestr)
-    info(infomsg)
+    timestr = datetime.strftime(limit, '%Y-%m-%d %H:%M:%S')
+    infomsg = 'Retention upper limit: {}'.format(timestr)
+    out(infomsg)
     if args.dryrun:
-        info('Dry-run only (no data will be deleted)')
+        out('Dry-run only (no data will be deleted)')
     else:
         logger.info(infomsg)
 
     # Locate files older than retention limit
-    timelimit = (time - datetime(1970, 1, 1)).total_seconds()
     ftot = fdel = ferr = 0
     for root, dirs, files in os.walk(rootdir):
         for f in files:
             if re.match('^.+_\d{8}.\d{2}', f):
                 ftot += 1
                 filepath = os.path.join(root, f)
-                if os.stat(filepath).st_mtime < timelimit:
+                if os.stat(filepath).st_mtime < limit.timestamp():
                     try:
                         if not args.dryrun:
+                            debug('Delete: {}'.format(filepath))
                             os.remove(filepath)
+                        else:
+                            debug('Simulating delete: {}'.format(filepath))
                         fdel += 1
                     except OSError:
                         warn('Unable to remove {}'.format(filepath))
@@ -219,17 +179,17 @@ def main():
     # Print summary
     if fdel > 0:
         msg = 'Removed {} data files (of {} totally)'.format(fdel, ftot)
-        info(msg)
+        out(msg)
         if not args.dryrun:
             logger.info(msg)
     else:
         msg = 'No data files are older than specified retention'
-        info(msg)
+        out(msg)
         if not args.dryrun:
             logger.info(msg)
     if ferr > 0:
         errmsg = 'Failed to remove {} data files'.format(ferr)
-        warn(errmsg)
+        out(errmsg, O_WARN)
         if not args.dryrun:
             logger.error(errmsg)
 
